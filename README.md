@@ -36,6 +36,8 @@ cmake ..     -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolch
 
 需要送入三个参数，分别是sequence length、cout、cin
 
+程序会在执行一次kernel之后统计接下来的10次执行用时，并计算均值
+
 ## 数据来源
 
 激活数据是通过一个简单的数学公式生成的确定性序列，其值在 `[-1.0, 1.0]` 之间循环；
