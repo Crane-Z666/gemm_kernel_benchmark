@@ -1,0 +1,33 @@
+# 文件清单
+
+**CMakeList:** 编译用，其中的`include_directories`需要改为cl头文件地址，分成了带ANDROID宏和不带ANDROID宏两部分，因为我的A16不能在电脑上跑，所以不带ANDROID的部分就没编译A16的两个文件
+
+**opencl_loader.cpp:** 用于安卓的交叉运行，动态链接库
+
+#### 以下三个文件带GPU和CPU的计算结果比较，用来测试GPU计算的有效性用
+
+**direct_run_kernel_from_string:** W8A32，带GPU和CPU的计算结果比较
+
+**direct_run_kernel_from_string_W4A32:** W4A32，带GPU和CPU的计算结果比较  
+
+**direct_run_kernel_from_string_W4A16:** W4A16，带GPU和CPU的计算结果比较  
+
+#### 以下两个文件只有GPU的计算，用来测试latency和GFLOPS
+
+**direct_run_kernel_from_string_W4A16_onlyGPU: **W4A16，没有GPU和CPU的计算校验，只有GPU的计算
+
+**direct_run_kernel_from_string_W8A16_onlyGPU: **W8A16，没有GPU和CPU的计算校验，只有GPU的计算
+
+# 编译的宏
+
+```
+mkdir build_androd && cd build_android
+export ANDROID_NDK_HOME="/opt/android-ndk-r26d/"
+cmake ..     -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake     -DANDROID_ABI=arm64-v8a     -DANDROID_PLATFORM=android-24     -DCMAKE_BUILD_TYPE=Release
+```
+
+注意`ANDROID_NDK_HOME`可能要改成对应NDK的路径
+
+# push哪些文件
+
+用哪个push哪个就行，没有其它.so文件要另外找和push的
