@@ -14,9 +14,9 @@
 
 #### 以下两个文件只有GPU的计算，用来测试latency和GFLOPS
 
-**direct_run_kernel_from_string_W4A16_onlyGPU:** W4A16，没有GPU和CPU的计算校验，只有GPU的计算
+**direct_run_kernel_from_string_W4A16_onlyGPU:** W4A16，没有GPU和CPU的计算校验，只有GPU的计算，输出latency和GFLOPS
 
-**direct_run_kernel_from_string_W8A16_onlyGPU:** W8A16，没有GPU和CPU的计算校验，只有GPU的计算
+**direct_run_kernel_from_string_W8A16_onlyGPU:** W8A16，没有GPU和CPU的计算校验，只有GPU的计算，输出latency和GFLOPS
 
 ## 编译的宏
 
@@ -43,6 +43,12 @@ cmake ..     -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolch
 权重数据是通过生成 `[0, 15]` 的循环整数序列；
 
 偏置和反量化参数也是通过简单的确定性算法生成的。偏置是一个循环的小浮点数序列，而反量化尺度在这个例子中是一个固定的常量。
+
+## GFLOPS计算公式
+
+对于一个 (M, K) 矩阵和一个 (K, N) 矩阵的乘法，其总运算量 Total_Operations 近似为 2 * M * K * N。
+
+GFLOPS = Total_Operations / Time_in_seconds / 1,000,000,000
 
 ## 其他说明
 
