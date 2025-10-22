@@ -43,3 +43,7 @@ cmake ..     -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolch
 权重数据是通过生成 `[0, 15]` 的循环整数序列；
 
 偏置和反量化参数也是通过简单的确定性算法生成的。偏置是一个循环的小浮点数序列，而反量化尺度在这个例子中是一个固定的常量。
+
+## 其他说明
+
+在电脑上算的GPU和CPU结果是一致的，在手机上算的GPU结果和电脑上算的GPU/CPU结果是一致的，应该能说明是正确调用kernel并送入数据，只是手机上算的GPU和CPU结果不同，原因应该是char这个东西在电脑和手机上默认的分别是unsigned和signed char导致区别
