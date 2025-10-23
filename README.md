@@ -34,7 +34,7 @@ cmake ..     -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolch
 
 ## 执行
 
-需要送入三个参数，分别是sequence length、cout、cin
+需要送入四个参数，分别是sequence length、cout、cin、blocknum。**注意cout需要是blocknum的整数倍**
 
 程序会在执行一次kernel之后统计接下来的10次执行用时，并计算均值
 
