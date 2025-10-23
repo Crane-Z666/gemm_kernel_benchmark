@@ -1041,7 +1041,6 @@ void log_to_excel_csv(
     std::cout << "\nSuccessfully logged results to " << filename << std::endl;
 }
 
-
 extern "C" int initOpenCL();
 
 int main(int argc, char** argv) {
@@ -1091,8 +1090,8 @@ int main(int argc, char** argv) {
         std::stringstream build_opts;
         build_opts << "-D MNN_SUPPORT_FP16 ";
         // Define compute types as half
-        build_opts << "-DCOMPUTE_FLOAT=half -DCOMPUTE_FLOAT4=half4 -DCOMPUTE_FLOAT8=half8 -DCOMPUTE_FLOAT16=half16 ";
-        build_opts << "-DCONVERT_COMPUTE_FLOAT=convert_half -DCONVERT_COMPUTE_FLOAT4=convert_half4 -DCONVERT_COMPUTE_FLOAT8=convert_half8 -DCONVERT_COMPUTE_FLOAT16=convert_half16 ";
+        build_opts << "-DCOMPUTE_FLOAT=float -DCOMPUTE_FLOAT4=float4 -DCOMPUTE_FLOAT8=float8 -DCOMPUTE_FLOAT16=float16 ";
+        build_opts << "-DCONVERT_COMPUTE_FLOAT=convert_float -DCONVERT_COMPUTE_FLOAT4=convert_float4 -DCONVERT_COMPUTE_FLOAT8=convert_float8 -DCONVERT_COMPUTE_FLOAT16=convert_float16 ";
         // Define storage/IO types as half
         build_opts << "-DFLOAT=half -DFLOAT4=half4 -DFLOAT8=half8 -DFLOAT16=half16 ";
         build_opts << "-DCONVERT_FLOAT4=convert_half4 -DCONVERT_FLOAT8=convert_half8 -DCONVERT_FLOAT16=convert_half16 ";
@@ -1381,7 +1380,7 @@ int main(int argc, char** argv) {
         // ======================= 新增：调用日志记录函数 =======================
         log_to_excel_csv(
             "data.csv",         // 文件名
-            "FP16",              // COMPUTE_FLOAT
+            "FP32",              // COMPUTE_FLOAT
             "W4A16",             // Quant
             bhw,                 // Sequence
             src_c,               // Cin

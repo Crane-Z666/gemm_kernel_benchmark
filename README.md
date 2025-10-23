@@ -12,11 +12,15 @@
 
 **direct_run_kernel_from_string_W4A16:** W4A16，带GPU和CPU的计算结果比较  
 
-#### 以下两个文件只有GPU的计算，用来测试latency和GFLOPS
+#### 以下四个文件只有GPU的计算，用来测试latency和GFLOPS
 
-**direct_run_kernel_from_string_W4A16_onlyGPU:** W4A16，没有GPU和CPU的计算校验，只有GPU的计算，输出latency和GFLOPS
+**direct_run_kernel_from_string_W4A16_onlyGPU:** W4A16，COMPUTE_FLOAT使用FP16，没有GPU和CPU的计算校验，只有GPU的计算，输出latency和GFLOPS
 
-**direct_run_kernel_from_string_W8A16_onlyGPU:** W8A16，没有GPU和CPU的计算校验，只有GPU的计算，输出latency和GFLOPS
+**direct_run_kernel_from_string_W8A16_onlyGPU:** W8A16，COMPUTE_FLOAT使用FP16，没有GPU和CPU的计算校验，只有GPU的计算，输出latency和GFLOPS
+
+**direct_run_kernel_from_string_W4A16_onlyGPU_floatcompute:** W4A16，COMPUTE_FLOAT使用FP32，没有GPU和CPU的计算校验，只有GPU的计算，输出latency和GFLOPS
+
+**direct_run_kernel_from_string_W8A16_onlyGPU_floatcompute:** W8A16，COMPUTE_FLOAT使用FP32，没有GPU和CPU的计算校验，只有GPU的计算，输出latency和GFLOPS
 
 ## 编译的宏
 

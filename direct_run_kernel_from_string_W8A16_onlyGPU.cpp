@@ -976,6 +976,73 @@ void verify_on_cpu(
     }
 }
 
+// =======================================================================
+// == 新增：日志记录函数                                                ==
+// =======================================================================
+/*
+ * @brief 将性能数据记录到 CSV 文件中，该文件可以由 Excel 打开。
+ *
+ * @param filename 要写入的文件名 (例如 "data.xlsx")。
+ * @param compute_float 计算精度 (例如 "FP32")。
+ * @param quant 量化方案 (例如 "W4A16")。
+ * @param sequence BHW 值。
+ * @param cin 输入通道数。
+ * @param cout 输出通道数。
+ * @param block_num BlockNum 值。
+ * @param pack_latency Pack Kernel 的平均延迟 (ms)。
+ * @param compute_latency Compute Kernel 的平均延迟 (ms)。
+ * @param unpack_latency Unpack Kernel 的平均延迟 (ms)。
+ * @param gflops 计算出的 GFLOPS。
+ */
+void log_to_excel_csv(
+    const std::string& filename,
+    const std::string& compute_float,
+    const std::string& quant,
+    int sequence,
+    int cin,
+    int cout,
+    int block_num,
+    double pack_latency,
+    double compute_latency,
+    double unpack_latency,
+    double gflops)
+{
+    // 1. 检查文件是否存在以决定是否写入表头
+    std::ifstream file_check(filename);
+    bool file_exists = file_check.good();
+    file_check.close();
+
+    // 2. 以追加模式打开文件。如果文件不存在，这会自动创建它。
+    std::ofstream log_file(filename, std::ios_base::app);
+    if (!log_file.is_open()) {
+        std::cerr << "Error: Could not open log file " << filename << " for writing." << std::endl;
+        return;
+    }
+
+    // 3. 如果文件是新创建的，则写入表头
+    if (!file_exists) {
+        log_file << "COMPUTE_FLOAT,Quant,Sequence,Cin,Cout,BlockNum,"
+                 << "Pack Latency/ms,Compute Latency/ms,Unpack Latency/ms,GFLOPS\n";
+    }
+
+    // 4. 写入数据行
+    log_file << std::fixed << std::setprecision(4) // 设置浮点数格式
+             << compute_float << ","
+             << quant << ","
+             << sequence << ","
+             << cin << ","
+             << cout << ","
+             << block_num << ","
+             << pack_latency << ","
+             << compute_latency << ","
+             << unpack_latency << ","
+             << std::setprecision(2) // GFLOPS 使用两位小数
+             << gflops << "\n";
+
+    log_file.close();
+    std::cout << "\nSuccessfully logged results to " << filename << std::endl;
+}
+
 extern "C" int initOpenCL();
 
 int main(int argc, char** argv) {
@@ -1302,6 +1369,22 @@ int main(int argc, char** argv) {
         std::cout << "----------------------------------------" << std::endl;
         std::cout << "Effective GFLOPS (Compute): " << std::fixed << std::setprecision(2) << gflops << " GFLOPS" << std::endl;
         std::cout << "----------------------------------------" << std::endl;
+        // =======================================================================
+
+        // ======================= 新增：调用日志记录函数 =======================
+        log_to_excel_csv(
+            "data.csv",         // 文件名
+            "FP16",              // COMPUTE_FLOAT
+            "W8A16",             // Quant
+            bhw,                 // Sequence
+            src_c,               // Cin
+            dst_c,               // Cout
+            block_num,           // BlockNum
+            total_pack_time_ms / iterations,    // Pack Latency/ms
+            avg_compute_time_ms, // Compute Latency
+            total_unpack_time_ms / iterations ,  // Unpack Latency
+            gflops               // GFLOPS
+        );
         // =======================================================================
         
     } catch (const cl::BuildError& e) {

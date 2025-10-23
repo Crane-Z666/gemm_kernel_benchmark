@@ -56,11 +56,22 @@ else()
         direct_run_kernel_from_string_W8A16_onlyGPU.cpp
         opencl_loader.cpp
     )
+    add_executable(direct_run_kernel_from_string_W8A16_onlyGPU_floatcompute
+        direct_run_kernel_from_string_W8A16_onlyGPU_floatcompute.cpp
+        opencl_loader.cpp
+    )
+    add_executable(direct_run_kernel_from_string_W4A16_onlyGPU_floatcompute
+        direct_run_kernel_from_string_W4A16_onlyGPU_floatcompute.cpp
+        opencl_loader.cpp
+    )
+
 
     target_link_libraries(direct_run_kernel_from_string PRIVATE dl)
     target_link_libraries(direct_run_kernel_from_string_W4A32 PRIVATE dl)
     target_link_libraries(direct_run_kernel_from_string_W4A16 PRIVATE dl)
     target_link_libraries(direct_run_kernel_from_string_W8A16_onlyGPU PRIVATE dl)
     target_link_libraries(direct_run_kernel_from_string_W4A16_onlyGPU PRIVATE dl)
+    target_link_libraries(direct_run_kernel_from_string_W4A16_onlyGPU_floatcompute PRIVATE dl)
+    target_link_libraries(direct_run_kernel_from_string_W4A16_onlyGPU_floatcompute PRIVATE dl)
 
 endif()
