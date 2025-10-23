@@ -983,8 +983,8 @@ int main(int argc, char** argv) {
         std::cerr << "Failed to initialize OpenCL loader." << std::endl;
         return -1;
     }
-    if (argc != 4) {
-        std::cerr << "Usage: " << argv[0] << " <BHW> <DST_C> <SRC_C>" << std::endl;
+    if (argc != 5) {
+        std::cerr << "Usage: " << argv[0] << " <BHW> <DST_C> <SRC_C> <BLKNUM>" << std::endl;
         return 1;
     }
 
@@ -992,6 +992,7 @@ int main(int argc, char** argv) {
         const int bhw = std::stoi(argv[1]);
         const int dst_c = std::stoi(argv[2]);
         const int src_c = std::stoi(argv[3]);
+        const int block_num = std::stoi(argv[4]);
         
         const std::string pack_kernel_name = "gemm_nhwc_to_c4nhw4";
         // W8A16 CHANGE: 使用 gemm_b4_c8_int8_buf 内核
@@ -1000,7 +1001,7 @@ int main(int argc, char** argv) {
 
         // W8A16 CHANGE: 更新标题
         std::cout << "Benchmarking & Verifying OpenCL Pipeline (W8A16 - INT8 weights, FP16 activations on Image2D)" << std::endl;
-        std::cout << "Input Dimensions: BHW=" << bhw << ", DST_C=" << dst_c << ", SRC_C=" << src_c << std::endl;
+        std::cout << "Input Dimensions: BHW=" << bhw << ", DST_C=" << dst_c << ", SRC_C=" << src_c << ", block_num=" << block_num << std::endl;
         
         cl::Platform platform;
         cl::Device device;
@@ -1051,13 +1052,26 @@ int main(int argc, char** argv) {
         const int dst_c_padded = (dst_c + DST_C_PACK - 1) / DST_C_PACK * DST_C_PACK;
         const int src_c_padded = (src_c + SRC_C_PACK - 1) / SRC_C_PACK * SRC_C_PACK;
         
+        // ======================= 核心修正点 1: 增加对齐检查 =======================
+        // 为了让分块逻辑正确，src_c_padded 必须能被 block_num 整除。
+        if (src_c_padded % block_num != 0) {
+            std::stringstream ss;
+            ss << "Error: src_c_padded (" << src_c_padded << ") must be divisible by block_num (" << block_num << ").";
+            throw std::runtime_error(ss.str());
+        }
+        // ========================================================================
+
         // W8A16 CHANGE: 主机端缓冲区现在是 cl_half (A16) 和 char (W8) 的混合
         // 我们还保留一份输入的 FP32 副本用于 CPU 验证。
         std::vector<float>   host_input_nhwc_f32(bhw_padded * src_c_padded, 0.f);
         std::vector<cl_half> host_input_nhwc_f16(bhw_padded * src_c_padded, 0);
         std::vector<char>    host_weight_oic(dst_c * src_c); // W8: 权重是 INT8
         std::vector<cl_half> host_bias_f16(dst_c_padded, 0); // A16: 偏置是 FP16
-        std::vector<cl_half> host_dequant_f16(dst_c_padded, 0); // A16: 反量化尺度是 FP16
+
+        // ======================= FIX 1: Correct buffer size =======================
+        // The dequant buffer size must match what the kernel expects: block_num * dst_c_padded
+        std::vector<cl_half> host_dequant_f16(block_num * dst_c_padded, 0);
+        // ==========================================================================
 
         std::cout << "Initializing and converting host data (W8 weights, A16 activations)..." << std::endl;
         // A16: 初始化输入数据并转换为 FP16
@@ -1078,8 +1092,17 @@ int main(int argc, char** argv) {
         // A16: 初始化偏置和反量化尺度数据并转换为 FP16
         for(size_t i = 0; i < dst_c; ++i) {
             host_bias_f16[i] = float_to_half_bits(static_cast<float>(i % 10) * 0.1f);
-            host_dequant_f16[i] = float_to_half_bits(0.01f);
         }
+
+        // ======================= FIX 2: Correct buffer initialization =======================
+        // Replicate the scale values for each of the `block_num` blocks.
+        for (int i = 0; i < block_num; ++i) {
+            for(size_t j = 0; j < dst_c; ++j) {
+                // The offset for the current block is i * dst_c_padded
+                host_dequant_f16[i * dst_c_padded + j] = float_to_half_bits(0.01f);
+            }
+        }
+        // ====================================================================================
 
         // W8A16 CHANGE: 将 INT8 权重打包到 Image2D 布局中
         std::cout << "Packing INT8 weights for Image2D layout..." << std::endl;
@@ -1089,7 +1112,11 @@ int main(int argc, char** argv) {
         // W8A16 CHANGE: 缓冲区大小现在使用 sizeof(cl_half)
         size_t nhwc_input_size = host_input_nhwc_f16.size() * sizeof(cl_half);
         size_t packed_tensor_size = (size_t)bhw_padded * std::max(src_c_padded, dst_c_padded) * sizeof(cl_half);
-        size_t dequant_buf_size = host_dequant_f16.size() * sizeof(cl_half);
+
+        // ======================= FIX 3: Correct buffer size calculation =======================
+        size_t dequant_buf_size = host_dequant_f16.size() * sizeof(cl_half); // This now correctly reflects the larger size
+        // ======================================================================================    
+    
         size_t bias_buf_size = host_bias_f16.size() * sizeof(cl_half);
         size_t nhwc_output_size = (size_t)bhw_padded * dst_c_padded * sizeof(cl_half);
 
@@ -1121,6 +1148,12 @@ int main(int argc, char** argv) {
         const int x_tiles = bhw_padded / BATCH_PACK;
         const int y_tiles = dst_c_padded / DST_C_PACK;
         cl::NDRange compute_global_size(x_tiles, y_tiles);
+
+        // ======================= 核心修正点 2: 计算正确的 block_dim =======================
+        // blockDim 参数应该是每个块的维度，而不是总维度
+        const int block_dim = src_c_padded / block_num;
+        // ==============================================================================
+
         int compute_arg_idx = 0;
         kernel_compute.setArg(compute_arg_idx++, (int)compute_global_size.get()[0]);
         kernel_compute.setArg(compute_arg_idx++, (int)compute_global_size.get()[1]);
@@ -1132,8 +1165,10 @@ int main(int argc, char** argv) {
         kernel_compute.setArg(compute_arg_idx++, bhw);
         kernel_compute.setArg(compute_arg_idx++, dst_c_padded);
         kernel_compute.setArg(compute_arg_idx++, src_c_padded);
-        kernel_compute.setArg(compute_arg_idx++, 1);
-        kernel_compute.setArg(compute_arg_idx++, src_c_padded);
+        kernel_compute.setArg(compute_arg_idx++, block_num);
+        // ======================= 核心修正点 3: 传递正确的 block_dim =======================
+        kernel_compute.setArg(compute_arg_idx++, block_dim); // 原来是 src_c_padded，这是错误的
+        // ==============================================================================
         kernel_compute.setArg(compute_arg_idx++, 1.0f);
 
         cl::NDRange unpack_global_size((bhw_padded / 4), (dst_c_padded / 4));

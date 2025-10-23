@@ -18,9 +18,8 @@
 // =======================================================================
 // == MNN Kernel Source String (Unchanged from original)                ==
 // =======================================================================
+// 内核源代码字符串保持不变。它通过不同的编译选项来支持 W4A16, W8A32, 以及我们现在的 W8A16。
 namespace MNN {
-// The kernel source string remains IDENTICAL. Its behavior is changed
-// entirely through build options, which is a sign of good, flexible design.
 const char* gemm_conv1x1_buf =
 "#ifdef MNN_SUPPORT_FP16\n"
 "#pragma OPENCL EXTENSION cl_khr_fp16 : enable\n"
@@ -812,7 +811,7 @@ const char* gemm_conv1x1_buf =
 using cl_half = uint16_t;
 
 // =======================================================================
-// == NEW: FP32 <-> FP16 Conversion Utilities                           ==
+// == NEW: FP32 <-> FP16 Conversion Utilities ==
 // =======================================================================
 // Converts a 32-bit float to a 16-bit half-float
 cl_half float_to_half_bits(float f) {
@@ -892,12 +891,12 @@ void select_opencl_device(cl::Platform& platform, cl::Device& device) {
             throw std::runtime_error("No OpenCL GPU or CPU devices found.");
         }
     }
-    
+
     device = devices[0];
 }
 
 // =======================================================================
-// == INT4 Weight Packing Helper for Image2D layout (Unchanged)         ==
+// == INT4 Weight Packing Helper for Image2D layout (Unchanged) ==
 // =======================================================================
 void pack_weights_to_image_buffer_int4(
     std::vector<uint8_t>& dst_image_buffer,
@@ -954,17 +953,19 @@ void verify_on_cpu(
             for (int k = 0; k < src_c; ++k) {
                 // NOTE: Using the original FP32 input for CPU verification
                 float in_val = input_nhwc_f32[i * src_c + k];
-                
+
                 int src_byte_idx = j * ((src_c + 1) / 2) + (k / 2);
                 uint8_t src_byte = weight_oic_packed[src_byte_idx];
                 uint8_t weight_4bit_unsigned = (k % 2 == 0) ? (src_byte & 0x0F) : (src_byte >> 4);
-                
+
                 char w_int4 = static_cast<char>(weight_4bit_unsigned) - 8;
 
                 // W4A16 CHANGE: Convert scale from FP16 to FP32 for calculation
+                // NOTE: For CPU verification, we only use the first block of dequant scales,
+                // as the GPU version (with the fix) replicates them.
                 float scale = half_bits_to_float(dequant_f16[j]);
                 float w_dequantized = static_cast<float>(w_int4) * scale;
-                
+
                 sum += in_val * w_dequantized;
             }
             // W4A16 CHANGE: Convert bias from FP16 to FP32 for calculation
@@ -980,8 +981,8 @@ int main(int argc, char** argv) {
         std::cerr << "Failed to initialize OpenCL loader." << std::endl;
         return -1;
     }
-    if (argc != 4) {
-        std::cerr << "Usage: " << argv[0] << " <BHW> <DST_C> <SRC_C>" << std::endl;
+    if (argc != 5) {
+        std::cerr << "Usage: " << argv[0] << " <BHW> <DST_C> <SRC_C> <BLKNUM>" << std::endl;
         return 1;
     }
 
@@ -989,15 +990,16 @@ int main(int argc, char** argv) {
         const int bhw = std::stoi(argv[1]);
         const int dst_c = std::stoi(argv[2]);
         const int src_c = std::stoi(argv[3]);
-        
+        const int block_num = std::stoi(argv[4]);
+
         const std::string pack_kernel_name = "gemm_nhwc_to_c4nhw4";
         const std::string compute_kernel_name = "gemm_b4_c8_int4_buf";
         const std::string unpack_kernel_name = "gemm_c4nhw4_to_nhwc";
 
         // W4A16 CHANGE: Updated title
         std::cout << "Benchmarking & Verifying OpenCL Pipeline (W4A16 - INT4 weights, FP16 activations on Image2D)" << std::endl;
-        std::cout << "Input Dimensions: BHW=" << bhw << ", DST_C=" << dst_c << ", SRC_C=" << src_c << std::endl;
-        
+        std::cout << "Input Dimensions: BHW=" << bhw << ", DST_C=" << dst_c << ", SRC_C=" << src_c << ", block_num=" << block_num << std::endl;
+
         cl::Platform platform;
         cl::Device device;
         select_opencl_device(platform, device);
@@ -1026,7 +1028,7 @@ int main(int argc, char** argv) {
         // Define storage/IO types as half
         build_opts << "-DFLOAT=half -DFLOAT4=half4 -DFLOAT8=half8 -DFLOAT16=half16 ";
         build_opts << "-DCONVERT_FLOAT4=convert_half4 -DCONVERT_FLOAT8=convert_half8 -DCONVERT_FLOAT16=convert_half16 ";
-        
+
         build_opts << "-D INPUT_CHANNEL_LEAVES_NUM=0 ";
         build_opts << "-D INPUT_BATCH_LEAVES_NUM=0 ";
         build_opts << "-D USE_IMAGE ";
@@ -1034,7 +1036,7 @@ int main(int argc, char** argv) {
 
         cl::Program program(context, MNN::gemm_conv1x1_buf);
         program.build({device}, build_opts.str().c_str());
-        
+
         cl::Kernel kernel_pack(program, pack_kernel_name.c_str());
         cl::Kernel kernel_compute(program, compute_kernel_name.c_str());
         cl::Kernel kernel_unpack(program, unpack_kernel_name.c_str());
@@ -1046,16 +1048,30 @@ int main(int argc, char** argv) {
         const int bhw_padded = (bhw + BATCH_PACK - 1) / BATCH_PACK * BATCH_PACK;
         const int dst_c_padded = (dst_c + DST_C_PACK - 1) / DST_C_PACK * DST_C_PACK;
         const int src_c_padded = (src_c + SRC_C_PACK - 1) / SRC_C_PACK * SRC_C_PACK;
-        
+
+        // ======================= 核心修正点 1: 增加对齐检查 =======================
+        // 为了让分块逻辑正确，src_c_padded 必须能被 block_num 整除。
+        if (src_c_padded % block_num != 0) {
+            std::stringstream ss;
+            ss << "Error: src_c_padded (" << src_c_padded << ") must be divisible by block_num (" << block_num << ").";
+            throw std::runtime_error(ss.str());
+        }
+        // ========================================================================
+
         // W4A16 CHANGE: Host buffers are now cl_half (uint16_t).
         // We also keep an FP32 copy of the input for CPU verification.
-        std::vector<float>   host_input_nhwc_f32(bhw_padded * src_c_padded, 0.f);
+        std::vector<float> host_input_nhwc_f32(bhw_padded * src_c_padded, 0.f);
         std::vector<cl_half> host_input_nhwc_f16(bhw_padded * src_c_padded, 0);
         std::vector<uint8_t> host_weight_oic_packed((dst_c * src_c + 1) / 2);
         std::vector<cl_half> host_bias_f16(dst_c_padded, 0);
-        std::vector<cl_half> host_dequant_f16(dst_c_padded, 0);
+        
+        // ======================= FIX 1: Correct buffer size =======================
+        // The dequant buffer size must match what the kernel expects: block_num * dst_c_padded
+        std::vector<cl_half> host_dequant_f16(block_num * dst_c_padded, 0);
+        // ==========================================================================
 
         std::cout << "Initializing and converting host data to FP16..." << std::endl;
+        // A16: 初始化输入数据并转换为 FP16
         for(int b=0; b<bhw; ++b) {
             for(int c=0; c<src_c; ++c) {
                 size_t idx = b*src_c_padded + c;
@@ -1064,17 +1080,28 @@ int main(int argc, char** argv) {
                 host_input_nhwc_f16[idx] = float_to_half_bits(val_f32);
             }
         }
-        
+
+        // W8: 初始化 INT4 权重数据
         for(size_t i = 0; i < host_weight_oic_packed.size(); ++i) {
             uint8_t val1 = (i * 2) % 16;
             uint8_t val2 = (i * 2 + 1) % 16;
             host_weight_oic_packed[i] = (val2 << 4) | val1;
         }
 
+        // A16: 初始化偏置和反量化尺度数据并转换为 FP16
         for(size_t i = 0; i < dst_c; ++i) {
             host_bias_f16[i] = float_to_half_bits(static_cast<float>(i % 10) * 0.1f);
-            host_dequant_f16[i] = float_to_half_bits(0.01f);
         }
+
+        // ======================= FIX 2: Correct buffer initialization =======================
+        // Replicate the scale values for each of the `block_num` blocks.
+        for (int i = 0; i < block_num; ++i) {
+            for(size_t j = 0; j < dst_c; ++j) {
+                // The offset for the current block is i * dst_c_padded
+                host_dequant_f16[i * dst_c_padded + j] = float_to_half_bits(0.01f);
+            }
+        }
+        // ====================================================================================
 
         std::cout << "Packing INT4 weights for Image2D layout..." << std::endl;
         std::vector<uint8_t> host_weight_image_buffer;
@@ -1083,7 +1110,11 @@ int main(int argc, char** argv) {
         // W4A16 CHANGE: Buffer sizes now use sizeof(cl_half)
         size_t nhwc_input_size = host_input_nhwc_f16.size() * sizeof(cl_half);
         size_t packed_tensor_size = (size_t)bhw_padded * std::max(src_c_padded, dst_c_padded) * sizeof(cl_half);
-        size_t dequant_buf_size = host_dequant_f16.size() * sizeof(cl_half);
+        
+        // ======================= FIX 3: Correct buffer size calculation =======================
+        size_t dequant_buf_size = host_dequant_f16.size() * sizeof(cl_half); // This now correctly reflects the larger size
+        // ======================================================================================
+
         size_t bias_buf_size = host_bias_f16.size() * sizeof(cl_half);
         size_t nhwc_output_size = (size_t)bhw_padded * dst_c_padded * sizeof(cl_half);
 
@@ -1096,11 +1127,11 @@ int main(int argc, char** argv) {
 
         cl::ImageFormat weight_image_format(CL_RGBA, CL_SIGNED_INT32);
         cl::Image2D weight_image(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR,
-            weight_image_format,
-            (src_c_padded + 3) / 4,
-            (dst_c_padded + 7) / 8,
-            0,
-            host_weight_image_buffer.data());
+                                 weight_image_format,
+                                 (src_c_padded + 3) / 4,
+                                 (dst_c_padded + 7) / 8,
+                                 0,
+                                 host_weight_image_buffer.data());
 
         // Set Kernel Arguments (unchanged logic, but buffers now point to FP16 data)
         cl::NDRange pack_global_size((bhw_padded / 4), (src_c_padded / 4));
@@ -1110,10 +1141,16 @@ int main(int argc, char** argv) {
         kernel_pack.setArg(3, packed_input_buffer);
         kernel_pack.setArg(4, bhw);
         kernel_pack.setArg(5, src_c_padded);
-        
+
         const int x_tiles = bhw_padded / BATCH_PACK;
         const int y_tiles = dst_c_padded / DST_C_PACK;
         cl::NDRange compute_global_size(x_tiles, y_tiles);
+
+        // ======================= 核心修正点 2: 计算正确的 block_dim =======================
+        // blockDim 参数应该是每个块的维度，而不是总维度
+        const int block_dim = src_c_padded / block_num;
+        // ==============================================================================
+
         int compute_arg_idx = 0;
         kernel_compute.setArg(compute_arg_idx++, (int)compute_global_size.get()[0]);
         kernel_compute.setArg(compute_arg_idx++, (int)compute_global_size.get()[1]);
@@ -1125,8 +1162,10 @@ int main(int argc, char** argv) {
         kernel_compute.setArg(compute_arg_idx++, bhw);
         kernel_compute.setArg(compute_arg_idx++, dst_c_padded);
         kernel_compute.setArg(compute_arg_idx++, src_c_padded);
-        kernel_compute.setArg(compute_arg_idx++, 1);
-        kernel_compute.setArg(compute_arg_idx++, src_c_padded);
+        kernel_compute.setArg(compute_arg_idx++, block_num);
+        // ======================= 核心修正点 3: 传递正确的 block_dim =======================
+        kernel_compute.setArg(compute_arg_idx++, block_dim); // 原来是 src_c_padded，这是错误的
+        // ==============================================================================
         kernel_compute.setArg(compute_arg_idx++, 1.0f);
 
         cl::NDRange unpack_global_size((bhw_padded / 4), (dst_c_padded / 4));
@@ -1151,7 +1190,7 @@ int main(int argc, char** argv) {
         double total_pack_time_ms = 0.0;
         double total_compute_time_ms = 0.0;
         double total_unpack_time_ms = 0.0;
-        
+
         std::cout << "Starting benchmark with " << iterations << " iterations..." << std::endl;
 
         for (int i = 0; i < iterations; ++i) {
@@ -1168,7 +1207,7 @@ int main(int argc, char** argv) {
             // Get profiling info. Times are in nanoseconds.
             cl_ulong pack_start = pack_event.getProfilingInfo<CL_PROFILING_COMMAND_START>();
             cl_ulong pack_end = pack_event.getProfilingInfo<CL_PROFILING_COMMAND_END>();
-            
+
             cl_ulong compute_start = compute_event.getProfilingInfo<CL_PROFILING_COMMAND_START>();
             cl_ulong compute_end = compute_event.getProfilingInfo<CL_PROFILING_COMMAND_END>();
 
@@ -1179,7 +1218,7 @@ int main(int argc, char** argv) {
             total_pack_time_ms += (pack_end - pack_start) / 1e6;
             total_compute_time_ms += (compute_end - compute_start) / 1e6;
             total_unpack_time_ms += (unpack_end - unpack_start) / 1e6;
-            
+
             // Total pipeline time on GPU is from the start of the first kernel
             // to the end of the last kernel.
             total_gpu_time_ms += (unpack_end - pack_start) / 1e6;
@@ -1196,7 +1235,7 @@ int main(int argc, char** argv) {
         std::cout << "Running CPU calculation for verification..." << std::endl;
         std::vector<float> cpu_output_nhwc;
         verify_on_cpu(cpu_output_nhwc, host_input_nhwc_f32, host_weight_oic_packed, host_dequant_f16, host_bias_f16, bhw, dst_c, src_c);
-        
+
         int error_count = 0;
         double max_diff = 0.0;
         // W4A16 CHANGE: Increased tolerance due to lower precision of FP16 arithmetic
@@ -1239,6 +1278,7 @@ int main(int argc, char** argv) {
             int c = i % dst_c;
             std::cout << half_bits_to_float(gpu_output_nhwc_f16[b*dst_c_padded + c]) << " ";
         }
+        std::cout << std::endl;
         /*
         std::cout << "\nCPU: ";
         for (int i = 0; i < 16 && i < cpu_output_nhwc.size(); ++i) std::cout << cpu_output_nhwc[i] << " ";
@@ -1248,23 +1288,23 @@ int main(int argc, char** argv) {
         // ======================= MODIFICATION FOR GFLOPS =======================
         // Calculate and report performance metrics
         double avg_compute_time_ms = total_compute_time_ms / iterations;
-        
+
         // Calculate total theoretical operations for the matrix multiplication
         // GEMM Ops = 2 * M * N * K
         // Here, M=bhw, N=dst_c, K=src_c
         double total_ops = 2.0 * bhw * dst_c * src_c;
-        
+
         // GFLOPS = (Total Operations / 1,000,000,000) / (Time in Seconds)
         double gflops = (avg_compute_time_ms > 0) ? (total_ops / 1e9) / (avg_compute_time_ms / 1000.0) : 0.0;
 
         std::cout << "\n----------------------------------------" << std::endl;
-        std::cout << "            Performance Summary" << std::endl;
+        std::cout << " Performance Summary" << std::endl;
         std::cout << "----------------------------------------" << std::endl;
         std::cout << std::fixed << std::setprecision(4);
         std::cout << "Average GPU Pipeline Time : " << total_gpu_time_ms / iterations << " ms" << std::endl;
-        std::cout << "  - Avg Pack Kernel Time  : " << total_pack_time_ms / iterations << " ms" << std::endl;
-        std::cout << "  - Avg Compute Kernel Time: " << avg_compute_time_ms << " ms" << std::endl;
-        std::cout << "  - Avg Unpack Kernel Time: " << total_unpack_time_ms / iterations << " ms" << std::endl;
+        std::cout << " - Avg Pack Kernel Time : " << total_pack_time_ms / iterations << " ms" << std::endl;
+        std::cout << " - Avg Compute Kernel Time: " << avg_compute_time_ms << " ms" << std::endl;
+        std::cout << " - Avg Unpack Kernel Time: " << total_unpack_time_ms / iterations << " ms" << std::endl;
         std::cout << "----------------------------------------" << std::endl;
         std::cout << "Effective GFLOPS (Compute): " << std::fixed << std::setprecision(2) << gflops << " GFLOPS" << std::endl;
         std::cout << "----------------------------------------" << std::endl;
@@ -1273,8 +1313,8 @@ int main(int argc, char** argv) {
     } catch (const cl::BuildError& e) {
         std::cerr << "OpenCL Build Error: " << e.what() << std::endl;
         for (const auto& log : e.getBuildLog()) {
-            std::cerr << "  Device: " << log.first.getInfo<CL_DEVICE_NAME>() << std::endl;
-            std::cerr << "  Log: " << log.second << std::endl;
+            std::cerr << " Device: " << log.first.getInfo<CL_DEVICE_NAME>() << std::endl;
+            std::cerr << " Log: " << log.second << std::endl;
         }
         return 1;
     } catch (const cl::Error& e) {
